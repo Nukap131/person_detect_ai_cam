@@ -5,11 +5,12 @@ from collections import defaultdict
 import sqlite3
 import time
 import math
-import os
 
-print("FABLAB PERSON TÆLLER v5.0 - IMX500 AI CAMERA")
+print("FABLAB PERSON TÆLLER v6.0 - IMX500 AI CAMERA")
 
+# ----------------------
 # Database
+# ----------------------
 
 DB_FILE = "fablab_people.db"
 
@@ -28,7 +29,9 @@ CREATE TABLE IF NOT EXISTS people (
 
 conn.commit()
 
+# ----------------------
 # Kamera + IMX500
+# ----------------------
 
 picam2 = Picamera2()
 imx500 = IMX500(picam2)
@@ -47,10 +50,12 @@ frame_height = 480
 
 line_x = frame_width // 2
 
-print(f"Kamera OK | Linje x={line_x} | Database: {DB_FILE}")
+print(f"Kamera OK | Linje x={line_x}")
 print("-" * 50)
 
+# ----------------------
 # Counters
+# ----------------------
 
 total_crossings = 0
 current_inside = 0
@@ -60,32 +65,37 @@ last_cross_time = {}
 
 cooldown_seconds = 1.5
 
-# simple tracker
+# ----------------------
+# Tracker
+# ----------------------
+
 tracks = {}
 next_track_id = 1
-max_distance = 80
-
-# Distance funktion
+max_distance = 100
 
 def distance(a, b):
     return math.sqrt((a[0]-b[0])**2 + (a[1]-b[1])**2)
 
+# ----------------------
 # Main loop
+# ----------------------
 
 try:
 
     while True:
 
         metadata = picam2.capture_metadata()
-
         detections = imx500.get_detections(metadata)
 
         current_centers = []
 
+        # Debug detections (kan slås fra senere)
+        # print(detections)
+
         for det in detections:
 
-            # 0 = person class
-            if det["category"] != 0:
+            # Person klasse (kan være 0 eller 1 afhængigt af model)
+            if det["category"] not in [0,1]:
                 continue
 
             x, y, w, h = det["bbox"]
@@ -95,29 +105,48 @@ try:
 
             current_centers.append((cx, cy))
 
-        # Track personer
+        # ----------------------
+        # Tracking
+        # ----------------------
 
         updated_tracks = {}
+        used_centers = set()
+
+        for track_id, old_center in tracks.items():
+
+            closest_center = None
+            closest_dist = 9999
+
+            for center in current_centers:
+
+                if center in used_centers:
+                    continue
+
+                d = distance(center, old_center)
+
+                if d < closest_dist and d < max_distance:
+                    closest_dist = d
+                    closest_center = center
+
+            if closest_center:
+
+                updated_tracks[track_id] = closest_center
+                used_centers.add(closest_center)
+
+        # nye tracks
 
         for center in current_centers:
 
-            matched_id = None
+            if center not in used_centers:
 
-            for track_id, old_center in tracks.items():
-
-                if distance(center, old_center) < max_distance:
-                    matched_id = track_id
-                    break
-
-            if matched_id is None:
-                matched_id = next_track_id
+                updated_tracks[next_track_id] = center
                 next_track_id += 1
-
-            updated_tracks[matched_id] = center
 
         tracks = updated_tracks
 
+        # ----------------------
         # Line crossing detection
+        # ----------------------
 
         for track_id, center in tracks.items():
 
@@ -140,6 +169,7 @@ try:
             too_soon = last_time and (now - last_time).total_seconds() < cooldown_seconds
 
             # IND (højre → venstre)
+
             if prev_cx > line_x and cx <= line_x and not too_soon:
 
                 direction = "←"
@@ -157,9 +187,10 @@ try:
 
                 conn.commit()
 
-                print(f"IND! {timestamp} | ID{track_id} | Total: {total_crossings} | Nu i rummet: {current_inside}")
+                print(f"IND! {timestamp} | ID{track_id} | Total: {total_crossings} | I rummet: {current_inside}")
 
             # UD (venstre → højre)
+
             elif prev_cx < line_x and cx >= line_x and not too_soon:
 
                 direction = "→"
@@ -176,11 +207,13 @@ try:
 
                 conn.commit()
 
-                print(f"UD! {timestamp} | ID{track_id} | Total: {total_crossings} | Nu i rummet: {current_inside}")
+                print(f"UD! {timestamp} | ID{track_id} | Total: {total_crossings} | I rummet: {current_inside}")
 
         time.sleep(0.03)
 
+# ----------------------
 # Stop
+# ----------------------
 
 except KeyboardInterrupt:
 
